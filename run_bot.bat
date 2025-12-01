@@ -1,0 +1,6 @@
+@echo off
+echo Installing dependencies...
+"C:\Users\Admin\AppData\Local\Programs\Python\Python311\python.exe" -m pip install -r requirements.txt
+echo Starting Bot...
+"C:\Users\Admin\AppData\Local\Programs\Python\Python311\python.exe" fedex_dispute_bot.py
+pause
