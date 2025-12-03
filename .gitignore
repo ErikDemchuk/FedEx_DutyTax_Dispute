@@ -1,0 +1,32 @@
+# User data (browser sessions - contains login info)
+user_data_v6/
+user_data/
+
+# State files (generated at runtime)
+bot_state.json
+bot_logs.json
+bot_config.json
+latest_view.png
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+

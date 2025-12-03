@@ -14,72 +14,112 @@ def handle_dispute_form(page: Page):
     """
     Handles the dispute form page.
     Selects 'Incorrect charge' -> 'Duty/Tax', types comment, and submits.
+    
+    The FedEx site uses custom dropdown components (not standard <select> elements).
+    We need to click the dropdown to open it, then click the option.
     """
     print("    Handling dispute form...")
     try:
-        # Wait for the select elements to appear
+        # Wait for the dispute form page to load
         print("    Waiting for dispute form to load...")
-        try:
-            page.wait_for_selector("select", timeout=10000)
-            time.sleep(1)  # Extra buffer
-        except Exception as e:
-            print(f"    ERROR: Form did not load in time: {e}")
-            print(f"    Current URL: {page.url}")
-            return
+        time.sleep(2)  # Give the page time to render
         
-        # 1. Fill Dispute Type: 'Incorrect charge'
-        print("    Selecting 'Incorrect charge'...")
-        try:
-            # Find all select elements
-            selects = page.locator("select").all()
-            if len(selects) >= 1:
-                # First select is Dispute Type
-                selects[0].select_option(label="Incorrect charge")
-                print("    ✓ Selected 'Incorrect charge'")
-                time.sleep(1)  # Wait for the second dropdown to appear
-            else:
-                print("    ERROR: Could not find select dropdowns")
-                return
-        except Exception as e:
-            print(f"    ERROR selecting Dispute Type: {e}")
-            return
+        print(f"    Current URL: {page.url}")
         
-        # 2. Fill Dispute Reason: 'Duty/Tax'
-        print("    Selecting 'Duty/Tax'...")
+        # 1. Click on "Dispute type" dropdown and select "Incorrect charge"
+        print("    Step 1: Selecting Dispute Type -> 'Incorrect charge'...")
         try:
-            # Refresh the selects list (second dropdown appears after first selection)
-            selects = page.locator("select").all()
-            if len(selects) >= 2:
-                # Second select is Dispute Reason
-                selects[1].select_option(label="Duty/Tax")
-                print("    ✓ Selected 'Duty/Tax'")
+            # Find the Dispute type dropdown - look for the label then find the dropdown near it
+            # The dropdown shows "Select" initially
+            dispute_type_dropdown = page.locator("text=Dispute type").locator("..").locator("div[role='button'], div[class*='select'], button, [class*='dropdown']").first
+            
+            # If that doesn't work, try finding by the "Select" placeholder text
+            if not dispute_type_dropdown.is_visible(timeout=2000):
+                # Try to find any clickable element that says "Select" near "Dispute type"
+                dispute_type_dropdown = page.locator("text=Dispute type*").locator("xpath=following::*[contains(text(),'Select')]").first
+            
+            # Click to open the dropdown
+            dispute_type_dropdown.click()
+            time.sleep(1)
+            
+            # Now click on "Incorrect charge" option
+            page.locator("text=Incorrect charge").first.click()
+            print("    ✓ Selected 'Incorrect charge'")
+            time.sleep(1.5)  # Wait for the second dropdown to appear
+            
+        except Exception as e:
+            print(f"    ERROR with method 1 for Dispute Type: {e}")
+            print("    Trying alternative method...")
+            try:
+                # Alternative: Click any element containing "Select" that's in a dropdown-like container
+                page.click("text=Select >> nth=0")
                 time.sleep(0.5)
-            else:
-                print("    WARNING: Could not find Dispute Reason dropdown")
+                page.click("text=Incorrect charge")
+                print("    ✓ Selected 'Incorrect charge' (alt method)")
+                time.sleep(1.5)
+            except Exception as e2:
+                print(f"    ERROR with alternative method: {e2}")
+                return
+        
+        # 2. Click on "Dispute reason" dropdown and select "Duty/Tax"
+        print("    Step 2: Selecting Dispute Reason -> 'Duty/Tax'...")
+        try:
+            # The second dropdown should now be visible
+            # Look for "Dispute reason" label and find the dropdown
+            dispute_reason_dropdown = page.locator("text=Dispute reason").locator("..").locator("div[role='button'], div[class*='select'], button, [class*='dropdown']").first
+            
+            if not dispute_reason_dropdown.is_visible(timeout=2000):
+                # Try finding "Select" text that appears after Dispute reason
+                dispute_reason_dropdown = page.locator("text=Dispute reason*").locator("xpath=following::*[contains(text(),'Select')]").first
+            
+            dispute_reason_dropdown.click()
+            time.sleep(1)
+            
+            # Click on "Duty/Tax" option
+            page.locator("text=Duty/Tax").first.click()
+            print("    ✓ Selected 'Duty/Tax'")
+            time.sleep(1)
+            
         except Exception as e:
-            print(f"    ERROR selecting Dispute Reason: {e}")
+            print(f"    ERROR with method 1 for Dispute Reason: {e}")
+            print("    Trying alternative method...")
+            try:
+                # Alternative: Find the second "Select" dropdown
+                page.click("text=Select >> nth=0")  # Click first available "Select"
+                time.sleep(0.5)
+                page.click("text=Duty/Tax")
+                print("    ✓ Selected 'Duty/Tax' (alt method)")
+                time.sleep(1)
+            except Exception as e2:
+                print(f"    ERROR with alternative method: {e2}")
         
         # 3. Fill comment
-        print("    Typing comment...")
+        print("    Step 3: Typing comment...")
         comment_text = "Reason for dispute- Products are CUSMA compliant. COO is Canada. FTN CCP 10221998 / PWDBW 7702060 Database and USMCA on file."
         try:
-            # Find textarea
+            # Find textarea or input for comments
             textarea = page.locator("textarea").first
-            textarea.fill(comment_text)
-            print("    ✓ Filled comment")
+            if textarea.is_visible(timeout=2000):
+                textarea.fill(comment_text)
+                print("    ✓ Filled comment in textarea")
+            else:
+                # Try input field
+                comment_input = page.locator("input[type='text']").last
+                comment_input.fill(comment_text)
+                print("    ✓ Filled comment in input field")
             time.sleep(0.5)
         except Exception as e:
             print(f"    WARNING: Could not fill comment: {e}")
         
         # 4. Submit
-        print("    Clicking SUBMIT DISPUTE...")
+        print("    Step 4: Clicking SUBMIT DISPUTE...")
         try:
-            # Find the submit button
-            submit_btn = page.locator("button:has-text('SUBMIT')").first
+            # Find the submit button - look for button with "SUBMIT" text
+            submit_btn = page.locator("button:has-text('SUBMIT'), button:has-text('Submit')").first
             submit_btn.click()
             print("    ✓ Clicked SUBMIT DISPUTE")
             
-            # Wait for navigation back to invoice detail page
+            # Wait for navigation/confirmation
             time.sleep(4)
             print("    ✓ Dispute submitted successfully")
             
@@ -251,19 +291,47 @@ def main():
         
         print(f"\nCurrent URL: {page.url}")
         
-        # Step 1: Click "PAY A BILL"
-        print("\n1. Clicking 'PAY A BILL'...")
-        try:
-            pay_bill_btn = page.get_by_text("PAY A BILL").first
-            pay_bill_btn.click()
-            time.sleep(2)
-            print("   ✓ Clicked PAY A BILL")
-        except Exception as e:
-            print(f"   ✗ Could not find PAY A BILL button: {e}")
-            print("   Trying to continue anyway...")
+        # Step 1: Navigate to FedEx Billing Online
+        # Try multiple methods since the page can vary
+        print("\n1. Navigating to FedEx Billing Online...")
+        billing_found = False
         
-        # Step 2: Handle the "Latest with FedEx Billing Online" popup
-        print("2. Checking for popup...")
+        # Method 1: Try clicking "VIEW & PAY BILL" in Quick links
+        try:
+            view_pay_bill = page.locator("text=VIEW & PAY BILL").first
+            if view_pay_bill.is_visible(timeout=3000):
+                print("   Found 'VIEW & PAY BILL' link...")
+                view_pay_bill.click()
+                time.sleep(3)
+                print("   ✓ Clicked VIEW & PAY BILL")
+                billing_found = True
+        except Exception as e:
+            print(f"   VIEW & PAY BILL not found: {e}")
+        
+        # Method 2: Try clicking "FEDEX BILLING ONLINE" link
+        if not billing_found:
+            try:
+                fedex_billing = page.locator("text=FEDEX BILLING ONLINE").first
+                if fedex_billing.is_visible(timeout=3000):
+                    print("   Found 'FEDEX BILLING ONLINE' link...")
+                    fedex_billing.click()
+                    time.sleep(3)
+                    print("   ✓ Clicked FEDEX BILLING ONLINE")
+                    billing_found = True
+            except Exception as e:
+                print(f"   FEDEX BILLING ONLINE not found: {e}")
+        
+        # Method 3: Navigate directly to billing URL
+        if not billing_found:
+            print("   Navigating directly to billing portal...")
+            page.goto("https://www.fedex.com/online/billing/cbs/summary")
+            time.sleep(3)
+            print("   ✓ Navigated to billing portal directly")
+        
+        print(f"   Current URL: {page.url}")
+        
+        # Step 2: Handle any popup that might appear
+        print("\n2. Checking for popup...")
         try:
             continue_btn = page.get_by_role("button", name="CONTINUE").first
             if continue_btn.is_visible(timeout=3000):
@@ -275,14 +343,38 @@ def main():
             print("   No popup found (or already closed)")
         
         # Step 3: Click "INVOICES" in the left sidebar
-        print("3. Clicking 'INVOICES' in sidebar...")
+        print("\n3. Clicking 'INVOICES' in sidebar...")
+        invoices_clicked = False
+        
+        # Method 1: Click INVOICES text in sidebar
         try:
             invoices_link = page.locator("text=INVOICES").first
-            invoices_link.click()
-            time.sleep(3)
-            print("   ✓ Navigated to Invoices")
+            if invoices_link.is_visible(timeout=5000):
+                invoices_link.click()
+                time.sleep(3)
+                print("   ✓ Clicked INVOICES")
+                invoices_clicked = True
         except Exception as e:
-            print(f"   ✗ Could not find INVOICES link: {e}")
+            print(f"   Could not click INVOICES: {e}")
+        
+        # Method 2: Try "VIEW ALL INVOICES" button
+        if not invoices_clicked:
+            try:
+                view_all = page.locator("text=VIEW ALL INVOICES").first
+                if view_all.is_visible(timeout=3000):
+                    view_all.click()
+                    time.sleep(3)
+                    print("   ✓ Clicked VIEW ALL INVOICES")
+                    invoices_clicked = True
+            except Exception as e:
+                print(f"   VIEW ALL INVOICES not found: {e}")
+        
+        # Method 3: Navigate directly to invoices URL
+        if not invoices_clicked:
+            print("   Navigating directly to invoices page...")
+            page.goto("https://www.fedex.com/online/billing/cbs/invoices")
+            time.sleep(3)
+            print("   ✓ Navigated to invoices directly")
         
         print(f"\nNew URL: {page.url}\n")
         

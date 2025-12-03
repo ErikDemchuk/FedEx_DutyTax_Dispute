@@ -1,6 +1,15 @@
 @echo off
+echo ============================================================
+echo FedEx Dispute Bot - FULL MODE
+echo Processing ALL Duty/Tax invoices
+echo ============================================================
+echo.
 echo Installing dependencies...
-"C:\Users\Admin\AppData\Local\Programs\Python\Python311\python.exe" -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
+echo.
+echo Installing Playwright browsers (if needed)...
+python -m playwright install chromium
+echo.
 echo Starting Bot...
-"C:\Users\Admin\AppData\Local\Programs\Python\Python311\python.exe" fedex_dispute_bot.py
+python fedex_dispute_bot.py
 pause
