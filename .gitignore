@@ -3,9 +3,6 @@ user_data_v6/
 user_data/
 
 # State files (generated at runtime)
-bot_state.json
-bot_logs.json
-bot_config.json
 latest_view.png
 
 # Logs

@@ -1,138 +1,24 @@
-import streamlit as st
-import time
-import subprocess
 import json
-import pandas as pd
-from datetime import datetime
 import os
+import subprocess
+import time
+import logging
+from flask import Flask, render_template, jsonify, send_file, request, Response
 
-# --- PAGE CONFIG ---
-st.set_page_config(
-    page_title="FedEx Dispute Bot",
-    page_icon="📦",
-    layout="wide",
-    initial_sidebar_state="collapsed"
-)
+# Suppress Werkzeug request logs (GET /status 200 etc)
+log = logging.getLogger('werkzeug')
+log.setLevel(logging.ERROR)
 
-# --- CLEAN THEME CSS ---
-st.markdown("""
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+app = Flask(__name__)
 
-    :root {
-        --background: #F7F7F4;
-        --foreground: #26251E;
-        --card: #FFFFFF;
-        --primary: #d97757;
-        --primary-foreground: #FFFFFF;
-        --secondary: #E6E4DD;
-        --muted-foreground: #8C8980;
-        --border: #E6E4DD;
-        --status-green: #519964;
-        --status-red: #D95252;
-        --radius: 0.5rem;
-    }
-
-    .stApp {
-        background-color: var(--background);
-        color: var(--foreground);
-        font-family: 'Inter', sans-serif;
-        font-size: 13px;
-    }
-
-    .stButton>button {
-        background-color: #FFFFFF;
-        color: var(--foreground);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        font-size: 14px;
-        font-weight: 500;
-        padding: 0.6rem 1.2rem;
-        box-shadow: none !important;
-        transition: all 0.1s;
-    }
-    .stButton>button:hover {
-        background-color: var(--secondary);
-        border-color: #d1d1d1;
-    }
-
-    button[kind="primary"] {
-        background-color: var(--primary) !important;
-        color: var(--primary-foreground) !important;
-        border: 1px solid var(--primary) !important;
-    }
-    button[kind="primary"]:hover {
-        background-color: #c66a4b !important;
-        border-color: #c66a4b !important;
-    }
-
-    div[data-testid="stMetric"] {
-        background-color: var(--card);
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        padding: 20px;
-        box-shadow: none;
-    }
-    label[data-testid="stMetricLabel"] {
-        font-size: 12px;
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-        color: var(--muted-foreground);
-    }
-    div[data-testid="stMetricValue"] {
-        font-size: 2rem;
-        font-weight: 600;
-        color: var(--foreground);
-    }
-
-    .stTextArea textarea {
-        background-color: #1a1a2e !important;
-        border: 1px solid #2d2d44 !important;
-        color: #e0e0e0 !important;
-        border-radius: var(--radius);
-        font-family: 'Consolas', 'Monaco', monospace !important;
-        font-size: 12px !important;
-        line-height: 1.5 !important;
-    }
-
-    [data-testid="stDataFrame"] {
-        border: 1px solid var(--border);
-        border-radius: var(--radius);
-        background-color: #FFFFFF;
-    }
-    
-    .status-badge {
-        padding: 6px 12px;
-        border-radius: 6px;
-        font-size: 12px;
-        font-weight: 600;
-        display: inline-block;
-    }
-    .status-running { background: #dcfce7; color: #166534; }
-    .status-waiting { background: #fef3c7; color: #92400e; }
-    .status-stopped { background: #fee2e2; color: #991b1b; }
-    .status-idle { background: #f3f4f6; color: #6b7280; }
-    .status-completed { background: #dbeafe; color: #1e40af; }
-
-    hr {
-        border-color: var(--border);
-        margin: 1.5rem 0;
-    }
-    
-    h1 {
-        font-weight: 600 !important;
-        font-size: 1.8rem !important;
-    }
-    
-    </style>
-""", unsafe_allow_html=True)
-
-# --- FILE PATHS ---
+# File paths
 STATE_FILE = "bot_state.json"
 LOG_FILE = "bot_logs.json"
 
-# --- HELPER FUNCTIONS ---
+# Global reference to worker process and latest frame
+worker_process = None
+latest_frame = None
+
 def load_state():
     if os.path.exists(STATE_FILE):
         try:
@@ -155,149 +41,178 @@ def load_logs():
                 return json.load(f)
         except:
             pass
-    return {"logs": [], "stats": {"disputed": 0, "skipped": 0, "errors": 0, "invoices_processed": 0, "total_invoices": 0}, "invoices": []}
+    return {"logs": [], "stats": {"disputed_month": 0, "total_disputed": 0, "disputed_session": 0, "errors": 0}}
 
-def reset_files():
-    for f in [STATE_FILE, LOG_FILE]:
-        if os.path.exists(f):
-            os.remove(f)
+@app.route('/')
+def index():
+    return render_template('index.html')
 
-# --- SESSION STATE ---
-if 'worker_process' not in st.session_state:
-    st.session_state.worker_process = None
-
-# --- LOAD CURRENT STATE ---
-state = load_state()
-logs_data = load_logs()
-current_status = state.get("status", "idle")
-stats = logs_data.get("stats", {})
-logs = logs_data.get("logs", [])
-invoices = logs_data.get("invoices", [])
-
-# --- HEADER ---
-st.markdown("# 📦 FedEx Dispute Bot")
-
-# Status Badge
-status_class = "status-idle"
-status_text = current_status.upper().replace("_", " ")
-if current_status in ["running", "processing"]: 
-    status_class = "status-running"
-elif current_status == "waiting_for_login": 
-    status_class = "status-waiting"
-    status_text = "WAITING FOR LOGIN"
-elif current_status == "completed": 
-    status_class = "status-completed"
-elif current_status in ["stopped", "error"]: 
-    status_class = "status-stopped"
-
-st.markdown(f'<span class="status-badge {status_class}">{status_text}</span>', unsafe_allow_html=True)
-
-st.markdown("---")
-
-# --- STATS ROW ---
-s1, s2, s3, s4 = st.columns(4)
-with s1:
-    st.metric("Disputed", stats.get("disputed", 0))
-with s2:
-    st.metric("Skipped", stats.get("skipped", 0))
-with s3:
-    st.metric("Total", stats.get("total_invoices", 0))
-with s4:
-    st.metric("Errors", stats.get("errors", 0))
-
-# Progress Bar
-progress = 0
-total = stats.get("total_invoices", 0)
-processed = stats.get("invoices_processed", 0)
-if total > 0:
-    progress = processed / total
-    st.progress(progress)
-    st.caption(f"Processing: {processed} / {total} invoices")
-
-st.markdown("---")
-
-# --- CONTROL BUTTONS ---
-col1, col2, col3 = st.columns([2, 2, 4])
-
-with col1:
-    if current_status == "idle" and st.session_state.worker_process is None:
-        if st.button("🚀 Launch Browser", type="primary", use_container_width=True):
-            # Clean up old state files first
-            reset_files()
-            # Start the browser worker process in a new window
-            st.session_state.worker_process = subprocess.Popen(
-                ["cmd", "/c", "start", "cmd", "/k", "python", "browser_worker.py"],
-                shell=True
-            )
-            time.sleep(2)
-            st.rerun()
-
-with col2:
-    if current_status == "waiting_for_login":
-        if st.button("▶️ Start Processing", type="primary", use_container_width=True):
-            save_command("start")
-            st.rerun()
-
-with col3:
-    if current_status in ["running", "processing", "waiting_for_login"]:
-        if st.button("⏹️ Stop Bot", use_container_width=True):
-            save_command("stop")
-            st.session_state.worker_process = None
-            st.rerun()
+@app.route('/start', methods=['POST'])
+def start_bot():
+    global worker_process
     
-    if current_status in ["completed", "stopped"]:
-        if st.button("🔄 Reset", use_container_width=True):
-            reset_files()
-            st.session_state.worker_process = None
-            st.rerun()
+    # Check if already running
+    state = load_state()
+    if state.get("status") in ["running", "processing", "waiting_for_login"]:
+        return jsonify({"status": "already_running"})
 
-# --- INSTRUCTIONS ---
-if current_status == "idle" and st.session_state.worker_process is None:
-    st.info("""
-    **How to use:**
-    1. Click **Launch Browser** - a Chrome window will open
-    2. **Log in to FedEx** in that browser window
-    3. Come back here and click **Start Processing**
-    4. The bot will automatically process all Duty/Tax invoices
-    """)
+    # Reset files - BUT KEEP HISTORY
+    if os.path.exists(STATE_FILE): os.remove(STATE_FILE)
+    
+    # Clear logs and invoices for new session
+    logs_data = {"logs": [], "stats": {"disputed": 0, "skipped": 0, "errors": 0, "invoices_processed": 0, "total_invoices": 0}, "invoices": []}
+    with open(LOG_FILE, 'w') as f:
+        json.dump(logs_data, f)
+    
+    # Start worker
+    # We use Popen to start it as a separate independent process
+    worker_process = subprocess.Popen(
+        ["python", "browser_worker.py"],
+        shell=True
+    )
+    
+    # Give it a moment to initialize
+    time.sleep(2)
+    
+    # Send start command immediately (worker waits for it after login, or we can let it wait)
+    # Actually, the worker waits for "start" command after login. 
+    # But for auto-login, we might want to send "start" automatically?
+    # The user wants "one button". 
+    # So we should probably write "start" to the state file after a delay or let the worker handle it.
+    # In browser_worker.py, it waits for "start" command after login.
+    # So we should write "start" to the state file.
+    
+    save_command("start")
+    
+    return jsonify({"status": "started"})
 
-if current_status == "waiting_for_login":
-    st.warning("⏳ **Waiting for you to log in to FedEx in the browser window.** Once logged in, click **Start Processing** above.")
+@app.route('/stop', methods=['POST'])
+def stop_bot():
+    save_command("stop")
+    return jsonify({"status": "stopping"})
 
-st.markdown("---")
+@app.route('/status')
+def get_status():
+    state = load_state()
+    logs_data = load_logs()
+    
+    # Load persistent history
+    stats_file = "stats.json"
+    stats = {}
+    if os.path.exists(stats_file):
+        try:
+            with open(stats_file, 'r') as f:
+                stats = json.load(f)
+        except:
+            pass
+            
+    # Calculate stats
+    current_month = time.strftime("%Y-%m")
+    monthly_disputes = stats.get("monthly_disputes", {}).get(current_month, 0)
+    total_disputes = stats.get("total_disputes", 0)
+    
+    # Session disputes (from current log file)
+    # Note: browser_worker updates persistent stats when it updates session stats
+    session_disputes = logs_data.get("stats", {}).get("disputed", 0)
+    
+    # Construct response
+    response_stats = {
+        "disputed_month": monthly_disputes,
+        "total_disputed": total_disputes,
+        "disputed_session": session_disputes,
+        "errors": logs_data.get("stats", {}).get("errors", 0),
+        "skipped": logs_data.get("stats", {}).get("skipped", 0)
+    }
+    
+    return jsonify({
+        "status": state.get("status", "idle"),
+        "logs": logs_data.get("logs", []),
+        "invoices": logs_data.get("invoices", []),
+        "stats": response_stats
+    })
 
-# --- MAIN CONTENT ---
-col_left, col_right = st.columns([1, 1])
+@app.route('/update_frame', methods=['POST'])
+def update_frame():
+    global latest_frame
+    latest_frame = request.data
+    # print(f"Received frame: {len(latest_frame)} bytes") 
+    return "ok"
 
-with col_left:
-    st.markdown("### 📋 Invoices Found")
-    if invoices:
-        df = pd.DataFrame(invoices)
-        duty_count = len([i for i in invoices if i.get("type") == "Duty/Tax"])
-        transport_count = len([i for i in invoices if i.get("type") == "Transportation"])
-        disputed_count = len([i for i in invoices if i.get("type") == "Disputed"])
-        
-        st.markdown(f"**{duty_count}** Duty/Tax • **{transport_count}** Transportation • **{disputed_count}** Already Disputed")
-        
-        st.dataframe(
-            df[["invoice", "type"]],
-            column_config={
-                "invoice": st.column_config.TextColumn("Invoice #", width="medium"),
-                "type": st.column_config.TextColumn("Type", width="medium")
-            },
-            use_container_width=True,
-            hide_index=True,
-            height=400
-        )
+def generate_frames():
+    global latest_frame
+    
+    # Try to load a placeholder if no frame yet
+    if latest_frame is None and os.path.exists("static/latest_view.png"):
+        try:
+            with open("static/latest_view.png", "rb") as f:
+                latest_frame = f.read()
+        except:
+            pass
+
+    while True:
+        if latest_frame:
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + latest_frame + b'\r\n')
+        else:
+            # If we still have nothing, just wait
+            pass
+            
+        time.sleep(0.05)
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route('/screenshot')
+def get_screenshot():
+    # Fallback for static image if needed
+    if latest_frame:
+         return Response(latest_frame, mimetype='image/jpeg')
     else:
-        st.caption("No invoices scanned yet. Start the bot to scan.")
+        return "", 404
 
-with col_right:
-    st.markdown("### 📜 Activity Log")
-    log_text = "\n".join(logs) if logs else "Waiting for bot to start..."
-    st.text_area("", value=log_text, height=450, key="log_area", label_visibility="collapsed")
+@app.route('/click', methods=['POST'])
+def handle_click():
+    data = request.json
+    x = data.get('x')
+    y = data.get('y')
+    
+    # Save the click command to the state so the worker can pick it up
+    # Note: This is a simplified way. For real-time control, we'd need a more direct channel (e.g. socket)
+    # But since the worker checks state frequently, we can write a "pending_click"
+    
+    # Since the worker is busy in a loop, we need a way to interrupt it or have it check often.
+    # For now, we'll append to a click_queue.json file that the worker checks.
+    
+    try:
+        with open("click_queue.json", "a") as f:
+            f.write(json.dumps({"x": x, "y": y, "time": time.time()}) + "\n")
+    except:
+        pass
+        
+    return jsonify({"status": "clicked"})
 
-# --- AUTO REFRESH ---
-if current_status not in ["idle", "completed", "stopped"] or (st.session_state.worker_process is not None and current_status != "completed"):
-    time.sleep(1.5)
-    st.rerun()
+if __name__ == '__main__':
+    # Ensure static folder exists
+    if not os.path.exists('static'):
+        os.makedirs('static')
+    
+    # Reset state on startup to avoid "already running" ghost state
+    if os.path.exists(STATE_FILE):
+        try:
+            os.remove(STATE_FILE)
+        except:
+            pass
+
+    # Clear logs on startup for fresh dashboard
+    if os.path.exists(LOG_FILE):
+        try:
+            os.remove(LOG_FILE)
+        except:
+            pass
+    
+    # Create a clean idle state
+    save_command("idle")
+        
+    print("Starting Flask server on http://localhost:5000")
+    app.run(debug=True, port=5000, use_reloader=False)
